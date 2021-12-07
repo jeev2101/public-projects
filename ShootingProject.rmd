@@ -1,0 +1,129 @@
+---
+title: "ShootingProject.rmd"
+author: ""
+date: "12/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Shooting Project
+
+In this analysis, we look at shooting incident data provided by the New York Police Department (NYPD). We look at the relationship between shootings and the time of day, and then compare that to similar data for vehicle collisions also sourced from the NYPD.
+
+### Required Libraries
+This document requires the following libraries to be installed on the user's machine:
+
+* lubridate
+* tidyverse
+
+```{r load_libraries}
+library(lubridate)
+library(tidyverse)
+```
+
+### Loading Data
+
+First, load the historical shooting data from the City of New York website. Also load vehicle collision data from that same website, so that we can do some comparisons.
+
+```{r load_shooting_data}
+shooting_data_url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+shooting_data_raw <- read.csv(shooting_data_url)
+summary(shooting_data_raw)
+```
+
+```{r loading_collision_data}
+collision_data_url <- "https://data.cityofnewyork.us/api/views/h9gi-nx95/rows.csv?accessType=DOWNLOAD"
+collision_data_raw <- read.csv(collision_data_url)
+summary(collision_data_raw)
+```
+
+### Transforming Data
+
+Transform the shooting data keeping only the columns we want to use, converting date and time strings to datetime objects.
+
+```{r transform_shooting_data}
+shooting_data <- shooting_data_raw %>% select(OCCUR_DATE, OCCUR_TIME)
+shooting_data$datetime <- paste(shooting_data$OCCUR_DATE, shooting_data$OCCUR_TIME, sep=" ")
+shooting_data2 <- shooting_data %>% mutate(datetime = mdy_hms(datetime))
+```
+
+Transform the collision data in a similar manner.
+
+```{r transform_collision_data}
+collision_data <- collision_data_raw %>% select(CRASH.DATE, CRASH.TIME, CONTRIBUTING.FACTOR.VEHICLE.1)
+collision_data$datetime <- paste(collision_data$CRASH.DATE, collision_data$CRASH.TIME, sep=" ")
+collision_data2 <- collision_data %>% mutate(datetime = mdy_hm(datetime))
+```
+
+### Analysis
+
+We want to see how many shootings occur in each hour of the day. We see from the plot that more shootings occur late at night or very early in the morning.
+
+```{r plot_shootings_by_hour}
+shooting_data3 <- shooting_data2 %>% mutate(hour = hour(datetime))
+shootings_by_hour <- count(shooting_data3, hour, name = "shootings")
+shootings_by_hour %>% ggplot(aes(x = hour, y = shootings)) + geom_line(aes(color = shootings)) + geom_point(aes(color = shootings)) + theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) + labs(title = "Shootings in New York City", y = NULL)
+```
+
+We want to compare this to vehicle collisions and see if collisions are most prevalent at the same hours that more shootings occur. We can see that collisions do not follow the same hourly pattern as shootings. Most collisions occur during daytime hours.
+
+```{r plot_collisions_by_hour}
+collision_data3 <- collision_data2 %>% mutate(hour = hour(datetime))
+collisions_by_hour <- count(collision_data3, hour, name = "collisions")
+collisions_by_hour %>% ggplot(aes(x = hour, y = collisions)) + geom_line(aes(color = collisions)) + geom_point(aes(color = collisions)) + theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) + labs(title = "Collisions in New York City", y = NULL)
+```
+
+If we filter to vehicle collisions where alcohol is involved and plot those collisions by hour, we see a pattern very similar to the daily pattern for shootings.
+
+```{r plot_collisions_alcohol_by_hour}
+collision_alcohol_data <- collision_data3 %>% filter(CONTRIBUTING.FACTOR.VEHICLE.1 == "Alcohol Involvement")
+collisions_alcohol_by_hour <- count(collision_alcohol_data, hour, name = "collisions")
+collisions_alcohol_by_hour %>% ggplot(aes(x = hour, y = collisions)) + geom_line(aes(color = collisions)) + geom_point(aes(color = collisions)) + theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) + labs(title = "Collisions w/Alcohol in New York City", y = NULL)
+```
+
+If we plot the hourly shootings alongside the hourly collisions involving alcohol, we can see they are similar in shape.
+
+```{r compare_shootings_collisions}
+shootings_collisions <- left_join(shootings_by_hour, collisions_alcohol_by_hour, by = 'hour')
+shootings_collisions %>% ggplot(aes(x = hour, y = shootings)) + geom_line(aes(color = "shootings")) + geom_point(aes(color = "shootings")) + geom_line(aes(y = collisions, color = "collisions")) + geom_point(aes(y = collisions, color = "collisions"))
+```
+
+We would also like to model shootings as predicted by hour of the day. First, we start with a linear model just to confirm that it is not a good fit.
+
+```{r modeling_linear_shooting_data}
+linear_model <- lm(shootings ~ hour, data = shootings_by_hour)
+summary(linear_model)
+```
+
+We can see that only 2% of the variance in shootings is explained by this model (Multiple R-squared = 0.01784). We now try to do better with a quadratic model. In this case, we see that the quadratic model is much improved and over 90% of the variance in shootings is explained by this model (Multiple R-squared = 0.9014).
+
+```{r modeling_quadratic_shooting_data}
+shootings_by_hour$hour2 <- shootings_by_hour$hour^2
+quadratic_model <- lm(shootings ~ hour + hour2, data=shootings_by_hour)
+summary(quadratic_model)
+```
+Here we plot the actual shootings value each hour compared with the curve of predictions from the quadratic model. This shows us visually that we are on the right track with our model.
+
+```{r plot_shootings_actual_vs_predicted}
+hour_values <- seq(0, 23, 1)
+shootings_predicted <- predict(quadratic_model, list(hour=hour_values, hour2=hour_values^2))
+plot(shootings_by_hour$hour, shootings_by_hour$shootings)
+lines(hour_values, shootings_predicted, col='blue')
+```
+
+### Conclusion
+
+We can conclude from the above analysis that the number of shootings in an hour of the day can be predicted by a quadratic model based on the hour. This can inform our further research on this topic based on the fact that we know time of day is an important factor.
+
+Additionally we have shown in the analysis that vehicle collisions involving alcohol follow a similar daily pattern to shootings. This is despite the fact that collisions overall peak during daylight hours. Both shootings and alcohol related collisions are the result of many complex factors, however this analysis has shown that hour of the day is an important contributor and is worth further research to establish any causation.
+
+My choice of these particular datasets and the direction of the analysis was informed by my own biases. Specifically that I believe gun violence is a result of complex factors, e.g. mental health, domestic issues, and economic disparity. I felt going into the analysis that alcohol related driving incidents would follow a similar pattern. These biases do not obviously help explain why more of these incidents occur at night, but it was these biases that led me down this path of investigation.
+
+### Session Info
+
+```{r session_info, echo=TRUE}
+sessionInfo()
+```
